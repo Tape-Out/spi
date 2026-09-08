@@ -1,0 +1,57 @@
+ip: spi
+contract: { aw: 8, dw: 32 }
+base: 0x10005000
+size: 0x100
+params: [fifoDepth, csWidth]
+regs:
+  - name: sckdiv
+    offset: 0x00
+    desc: clock divisor
+    fields: [ { name: val, width: 12, sw: rw, hw: r, reset: 3 } ]
+  - name: sckmode
+    offset: 0x04
+    desc: clock polarity and phase
+    fields:
+      - { name: pha, bits: "0:0", sw: rw, hw: r, reset: 0 }
+      - { name: pol, bits: "1:1", sw: rw, hw: r, reset: 0 }
+  - name: csid
+    offset: 0x10
+    desc: chip select index
+    fields: [ { name: val, width: csWidth, sw: rw, hw: r, reset: 0 } ]
+  - name: csmode
+    offset: 0x18
+    desc: chip select behaviour
+    fields: [ { name: val, bits: "1:0", sw: rw, hw: r, reset: 0 } ]
+  - name: fmt
+    offset: 0x40
+    desc: frame format
+    feature: quad
+    fields:
+      - { name: proto, bits: "1:0",  sw: rw, hw: r, reset: 0 }
+      - { name: endian, bits: "2:2", sw: rw, hw: r, reset: 0 }
+      - { name: dir,   bits: "3:3",  sw: rw, hw: r, reset: 0 }
+      - { name: len,   bits: "19:16", sw: rw, hw: r, reset: 8 }
+  - name: txdata
+    offset: 0x48
+    desc: transmit, write pushes
+    fields:
+      - { name: data, bits: "7:0",   sw: w, hw: r, swmod: true }
+      - { name: full, bits: "31:31", sw: r, hw: w, volatile: true }
+  - name: rxdata
+    offset: 0x4C
+    desc: receive, read pops
+    fields:
+      - { name: data,  bits: "7:0",   sw: r, hw: w, volatile: true, swacc: true }
+      - { name: empty, bits: "31:31", sw: r, hw: w, volatile: true }
+  - name: ie
+    offset: 0x70
+    desc: interrupt enable
+    fields:
+      - { name: txwm, bits: "0:0", sw: rw, hw: r, reset: 0 }
+      - { name: rxwm, bits: "1:1", sw: rw, hw: r, reset: 0 }
+  - name: ip
+    offset: 0x74
+    desc: interrupt pending
+    fields:
+      - { name: txwm, bits: "0:0", sw: r, hw: w, volatile: true }
+      - { name: rxwm, bits: "1:1", sw: r, hw: w, volatile: true }
