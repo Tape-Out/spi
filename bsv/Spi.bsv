@@ -49,6 +49,14 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   Reg#(Bool)      txPend <- mkReg(False);
   Wire#(Bit#(4))  ioIn  <- mkBypassWire;
 
+  // 帧方向。这个寄存器本来就被 quad 门控，所以关掉 quad 时它读回零、
+  // 两个判据都不成立，行为跟以前一模一样。
+  //   dir = 1：只发，线上回来的丢掉——共享线的双线/四线模式下，
+  //            主机正在驱动，采到的是自己
+  //   dir = 0：只收，共享线上放开驱动让从机送
+  Bool sendOnly = cfg.quad && r.fmt_dir == 1;
+  Bool recvOnly = cfg.quad && r.fmt_dir == 0;
+
   // 帧长只有开了 quad 才可配，否则恒 8 位
   Bit#(4) flen = cfg.quad ? (r.fmt_len == 0 ? 8 : r.fmt_len) : 8;
 
@@ -90,7 +98,7 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
           // 这里再补一次采样就等于把整个字节循环左移一位——
           // 0xA5 收回来成 0x4B，而 0x00 与 0xFF 转不转都一样，所以只有
           // 非对称的字节看得出来。
-          if (rxq.notFull) rxq.enq(shRx);
+          if (!sendOnly && rxq.notFull) rxq.enq(shRx);
         end else
           bitn <= bitn + 1;
       end
@@ -120,7 +128,9 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
                               ? ~(1 << r.csid) : '1;
     method Bit#(4) io_o  = {3'b000, r.fmt_endian == 1 && cfg.quad
                                     ? shTx[0] : shTx[7]};
-    method Bit#(4) io_oe = cfg.quad && r.fmt_proto == 2 ? 4'b1111 : 4'b0001;
+    // 四线模式下收方向要放开全部四根，否则主机与从机对着驱动
+    method Bit#(4) io_oe = (cfg.quad && r.fmt_proto == 2)
+                         ? (recvOnly ? 4'b0000 : 4'b1111) : 4'b0001;
     method Action io_i(Bit#(4) v); ioIn._write(v); endmethod
   endinterface
   method Bool irq = ((r.ie_txwm == 1) && txq.notFull)
