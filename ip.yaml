@@ -1,6 +1,6 @@
 name: spi
 version: 0.1.0
-spec: "0.1"
+spec: '0.1'
 kind: ip
 lang: bsv
 identity:
@@ -8,24 +8,52 @@ identity:
   display_name: SPI master
   summary: SPI master with QSPI and execute-in-place as features.
   category: peripheral
-  subcategories: [spi]
+  subcategories:
+  - spi
   ip_family: spi
-  integration_profile: [apb4-slave]
+  integration_profile:
+  - apb4-slave
   maturity: planned
 contract:
   version: 1
-  ctrl: { shape: flat, aw: 8, dw: 32 }
-  irq: [ { name: irq, kind: level } ]
+  ctrl:
+    shape: flat
+    aw: 8
+    dw: 32
+  irq:
+  - name: irq
+    kind: level
 params:
-  fifoDepth: { type: int, default: 8, range: [1, 64] }
-  csWidth:   { type: int, default: 1, range: [1, 8] }
+  fifoDepth:
+    type: int
+    default: 8
+    range:
+    - 1
+    - 64
+  csWidth:
+    type: int
+    default: 1
+    range:
+    - 1
+    - 8
 features:
-  quad: { type: bool, default: false }
-  xip:  { type: bool, default: false, depends: [quad] }
+  quad:
+    type: bool
+    default: false
 emit:
-  - kind: bsv
-    package: Spi
-    module: mkSpi
-    config_type: SpiCfg
-    interface: SpiIfc
-deps: { hwcore: "^0.1" }
+- kind: bsv
+  package: Spi
+  module: mkSpi
+  config_type: SpiCfg
+  interface: SpiIfc
+  ctrl: regs
+  pins:
+  - name: pins
+    type: SpiPins
+    targs:
+    - csWidth
+- kind: verilog-flat
+  bus: apb4
+deps:
+  hwcore: ^0.1
+  amba: ^0.1
