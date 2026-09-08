@@ -42,10 +42,10 @@ features:
     default: false
     area:
       points:
-        '1': 79.52
-        '2': 133.56
-        '4': 97.16
-        '8': 239.96
+        '1': 73.36
+        '2': 73.92
+        '4': 168.84
+        '8': 183.12
       per: fifoDepth
 emit:
 - kind: bsv
@@ -67,55 +67,55 @@ deps:
 area:
   base:
     points:
-      '1': 1099.84
-      '2': 1297.8
-      '4': 1881.6
-      '8': 2719.36
+      '1': 1114.96
+      '2': 1272.6
+      '4': 1822.52
+      '8': 2678.48
     per: fifoDepth
-  margin: 0.0269
+  margin: 0.0395
   model: points-additive
   error:
-    bound: 0.067
+    bound: 0.053
     sign: over
     note: parameter curves stored as measured points, features added on top, then
-      lifted by 0.0269 so that no untested combination predicts under; the worst came
-      in 2.19 percent under before the lift
+      lifted by 0.0395 so that no untested combination predicts under; the worst came
+      in 3.45 percent under before the lift
   measured:
   - at:
       fifoDepth: 1
       quad: false
-    um2: 1099.84
+    um2: 1114.96
   - at:
       fifoDepth: 2
       quad: false
-    um2: 1297.8
+    um2: 1272.6
   - at:
       fifoDepth: 4
       quad: false
-    um2: 1881.6
+    um2: 1822.52
   - at:
       fifoDepth: 8
       quad: false
-    um2: 2719.36
+    um2: 2678.48
   - at:
       fifoDepth: 1
       quad: true
-    um2: 1179.36
+    um2: 1188.32
   - at:
       fifoDepth: 2
       quad: true
-    um2: 1431.36
+    um2: 1346.52
   - at:
       fifoDepth: 4
       quad: true
-    um2: 1978.76
+    um2: 1991.36
   - at:
       fifoDepth: 8
       quad: true
-    um2: 2959.32
+    um2: 2861.6
   corner:
     tool: ecc
     pdk: ics55
     freq_mhz: 100
-    measured: '2026-09-08'
-    gen_digest: sha256:7a0901dfd5240f71
+    measured: '2026-09-09'
+    gen_digest: sha256:1772f360181fd7db
