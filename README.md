@@ -11,7 +11,13 @@ bus-neutral contracts in [`hwcore`](https://github.com/Tape-Out/hwcore), assembl
 
 ## Status
 
-Planned. The entry in [`index`](https://github.com/Tape-Out/index) tracks what lands when.
+Planned. What sits in this repository today is the retired picorv32-era Verilog, kept for
+provenance. The Bluespec rewrite against the [`spec`](https://github.com/Tape-Out/spec)
+contracts has not landed yet, and it will not reuse this source.
+
+## Notes from the original
+
+暂时实现一个只有一个主设备的SPI，日后扩展多主
 
 ## License
 
