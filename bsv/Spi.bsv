@@ -85,7 +85,12 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
       if (half) begin
         if (bitn + 1 == flen) begin
           busy <= False;
-          if (rxq.notFull) rxq.enq({shRx[6:0], ioIn[1]});
+          // shRx 到这一拍已经攒够八位了：一个位周期是「先采样、后移位」，
+          // 收尾这一拍走的是移位那一边，采样早在上半拍做完。
+          // 这里再补一次采样就等于把整个字节循环左移一位——
+          // 0xA5 收回来成 0x4B，而 0x00 与 0xFF 转不转都一样，所以只有
+          // 非对称的字节看得出来。
+          if (rxq.notFull) rxq.enq(shRx);
         end else
           bitn <= bitn + 1;
       end
