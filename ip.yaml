@@ -40,6 +40,13 @@ features:
   quad:
     type: bool
     default: false
+    area:
+      points:
+        '1': 79.52
+        '2': 133.56
+        '4': 97.16
+        '8': 239.96
+      per: fifoDepth
 emit:
 - kind: bsv
   package: Spi
@@ -57,3 +64,58 @@ emit:
 deps:
   hwcore: ^0.1
   amba: ^0.1
+area:
+  base:
+    points:
+      '1': 1099.84
+      '2': 1297.8
+      '4': 1881.6
+      '8': 2719.36
+    per: fifoDepth
+  margin: 0.0269
+  model: points-additive
+  error:
+    bound: 0.067
+    sign: over
+    note: parameter curves stored as measured points, features added on top, then
+      lifted by 0.0269 so that no untested combination predicts under; the worst came
+      in 2.19 percent under before the lift
+  measured:
+  - at:
+      fifoDepth: 1
+      quad: false
+    um2: 1099.84
+  - at:
+      fifoDepth: 2
+      quad: false
+    um2: 1297.8
+  - at:
+      fifoDepth: 4
+      quad: false
+    um2: 1881.6
+  - at:
+      fifoDepth: 8
+      quad: false
+    um2: 2719.36
+  - at:
+      fifoDepth: 1
+      quad: true
+    um2: 1179.36
+  - at:
+      fifoDepth: 2
+      quad: true
+    um2: 1431.36
+  - at:
+      fifoDepth: 4
+      quad: true
+    um2: 1978.76
+  - at:
+      fifoDepth: 8
+      quad: true
+    um2: 2959.32
+  corner:
+    tool: ecc
+    pdk: ics55
+    freq_mhz: 100
+    measured: '2026-09-08'
+    gen_digest: sha256:7a0901dfd5240f71
