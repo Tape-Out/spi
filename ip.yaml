@@ -47,6 +47,10 @@ features:
         '4': 97.16
         '8': 239.96
       per: fifoDepth
+test:
+  # 帧格式的方向位（只收 / 只发 / 收发同时）还没实现，本版一律收发同时。
+  unused:
+  - fmt_dir
 emit:
 - kind: bsv
   package: Spi
