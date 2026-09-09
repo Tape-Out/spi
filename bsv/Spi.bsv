@@ -31,7 +31,7 @@ endinterface
 module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     provisos (Mul#(TDiv#(dw, 8), 8, dw), Add#(_a, 8, aw), Add#(_b, 12, dw),
               Add#(_c, 1, dw), Add#(_d, csWidth, dw), Add#(_e, 2, dw),
-              Add#(_f, 4, dw), Add#(_g, 8, dw), Add#(_h, csWidth, 8));
+              Add#(_f, 4, dw), Add#(_g, 8, dw), Add#(_h, csWidth, 8), Add#(_i, 3, dw));
 
   SpiRegsIfc#(aw, dw, fifoDepth, csWidth) r <- mkSpiRegs(
       SpiRegsCfg { quad: cfg.quad });
@@ -48,6 +48,17 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   Reg#(Bit#(8))   shRx  <- mkReg(0);
   Reg#(Bool)      txPend <- mkReg(False);
   Wire#(Bit#(4))  ioIn  <- mkBypassWire;
+  // HOLD 模式下片选已经按下了没有。写 csmode 或 csid 都放开（19.8）。
+  Reg#(Bool)      csHeld <- mkConfigReg(False);
+
+  // 队列里有几条：FIFOF 不给计数，而入队与出队在不同规则里，共用一个计数器
+  // 会抢同一个写口——各自一个自由计数器，相减即占用数。宽度够，回绕不影响差值。
+  Reg#(Bit#(8)) txIn  <- mkReg(0);
+  Reg#(Bit#(8)) txOut <- mkReg(0);
+  Reg#(Bit#(8)) rxIn  <- mkReg(0);
+  Reg#(Bit#(8)) rxOut <- mkReg(0);
+  Bit#(8) txLevel = txIn - txOut;
+  Bit#(8) rxLevel = rxIn - rxOut;
 
   // 帧方向。这个寄存器本来就被 quad 门控，所以关掉 quad 时它读回零、
   // 两个判据都不成立，行为跟以前一模一样。
@@ -67,11 +78,19 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
 
   rule push (txPend && txq.notFull);
     txq.enq(r.txdata_data);
+    txIn <= txIn + 1;
+  endrule
+
+  // 写 csmode 或 csid 就放开 HOLD 按住的片选；否则一开始传就按下
+  rule csTrack;
+    if (r.csmode_wr || r.csid_wr) csHeld <= False;
+    else if (busy && r.csmode == 2) csHeld <= True;
   endrule
 
   rule begin_frame (!busy && txq.notEmpty);
     shTx  <= txq.first;
     txq.deq;
+    txOut <= txOut + 1;
     busy  <= True;
     half  <= False;
     bitn  <= 0;
@@ -98,7 +117,7 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
           // 这里再补一次采样就等于把整个字节循环左移一位——
           // 0xA5 收回来成 0x4B，而 0x00 与 0xFF 转不转都一样，所以只有
           // 非对称的字节看得出来。
-          if (!sendOnly && rxq.notFull) rxq.enq(shRx);
+          if (!sendOnly && rxq.notFull) begin rxq.enq(shRx); rxIn <= rxIn + 1; end
         end else
           bitn <= bitn + 1;
       end
@@ -110,13 +129,16 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     r.txdata_full_in(txq.notFull ? 0 : 1);
     r.rxdata_data_in(rxq.first);
     r.rxdata_empty_in(rxq.notEmpty ? 0 : 1);
-    r.ip_txwm_in(txq.notFull ? 1 : 0);
-    r.ip_rxwm_in(rxq.notEmpty ? 1 : 0);
+    // 19.15：发送队列**严格少于** txmark 才抬，接收队列**严格多于** rxmark 才抬。
+    // 原来只看「非满」「非空」，两个门限寄存器压根不存在。
+    r.ip_txwm_in(txLevel < zeroExtend(r.txmark) ? 1 : 0);
+    r.ip_rxwm_in(rxLevel > zeroExtend(r.rxmark) ? 1 : 0);
   endrule
 
   // swacc：软件读过 rxdata 就弹一个
   rule pop (r.rxdata_data_rd && rxq.notEmpty);
     rxq.deq;
+    rxOut <= rxOut + 1;
   endrule
 
   interface regs = r.regs;
@@ -124,8 +146,12 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     // 空闲电平由 pol 定；csmode 为 2 时片选常抬，给软件手动控时序留口子
     method Bit#(1) sck = busy ? (half ? ~r.sckmode_pol : r.sckmode_pol)
                               : r.sckmode_pol;
-    method Bit#(csWidth) cs_n = (busy && r.csmode != 2)
-                              ? ~(1 << r.csid) : '1;
+    // 19.8 表 73：0=AUTO 一帧一起一落 · 2=HOLD 第一帧之后一直按住 ·
+    // 3=OFF 硬件完全不管。原来写的是 `busy && csmode != 2`——
+    // HOLD 从不拉低、OFF 反而跟着帧起落，两个模式的行为正好错位。
+    method Bit#(csWidth) cs_n =
+      (r.csmode == 3) ? '1
+      : ((busy || (r.csmode == 2 && csHeld)) ? ~(1 << r.csid) : '1);
     method Bit#(4) io_o  = {3'b000, r.fmt_endian == 1 && cfg.quad
                                     ? shTx[0] : shTx[7]};
     // 四线模式下收方向要放开全部四根，否则主机与从机对着驱动
@@ -133,8 +159,9 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
                          ? (recvOnly ? 4'b0000 : 4'b1111) : 4'b0001;
     method Action io_i(Bit#(4) v); ioIn._write(v); endmethod
   endinterface
-  method Bool irq = ((r.ie_txwm == 1) && txq.notFull)
-                 || ((r.ie_rxwm == 1) && rxq.notEmpty);
+  // 与喂给 ip 的是同一个表达式
+  method Bool irq = ((r.ie_txwm == 1) && txLevel < zeroExtend(r.txmark))
+                 || ((r.ie_rxwm == 1) && rxLevel > zeroExtend(r.rxmark));
 endmodule
 
 endpackage

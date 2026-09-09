@@ -14,14 +14,15 @@ regs:
     fields:
       - { name: pha, bits: "0:0", sw: rw, hw: r, reset: 0 }
       - { name: pol, bits: "1:1", sw: rw, hw: r, reset: 0 }
+  # swmod：写 csid 或 csmode 都要放开 HOLD 按住的片选（19.8 的三条之一）
   - name: csid
     offset: 0x10
     desc: chip select index
-    fields: [ { name: val, width: csWidth, sw: rw, hw: r, reset: 0 } ]
+    fields: [ { name: val, width: csWidth, sw: rw, hw: r, reset: 0, swmod: true } ]
   - name: csmode
     offset: 0x18
     desc: chip select behaviour
-    fields: [ { name: val, bits: "1:0", sw: rw, hw: r, reset: 0 } ]
+    fields: [ { name: val, bits: "1:0", sw: rw, hw: r, reset: 0, swmod: true } ]
   - name: fmt
     offset: 0x40
     desc: frame format
@@ -43,6 +44,16 @@ regs:
     fields:
       - { name: data,  bits: "7:0",   sw: r, hw: w, volatile: true, swacc: true }
       - { name: empty, bits: "31:31", sw: r, hw: w, volatile: true }
+  # 19.13/19.14：水线门限。没有它们，ie/ip 的两位就没有意义。
+  - name: txmark
+    offset: 0x50
+    desc: transmit watermark threshold
+    fields: [ { name: val, bits: "2:0", sw: rw, hw: r, reset: 0 } ]
+  - name: rxmark
+    offset: 0x54
+    desc: receive watermark threshold
+    fields: [ { name: val, bits: "2:0", sw: rw, hw: r, reset: 0 } ]
+
   - name: ie
     offset: 0x70
     desc: interrupt enable

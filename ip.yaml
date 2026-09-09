@@ -42,10 +42,10 @@ features:
     default: false
     area:
       points:
-        '1': 73.36
-        '2': 73.92
-        '4': 168.84
-        '8': 183.12
+        '1': 94.08
+        '2': 154.84
+        '4': 177.52
+        '8': 153.44
       per: fifoDepth
 emit:
 - kind: bsv
@@ -67,85 +67,85 @@ deps:
 area:
   base:
     points:
-      '1': 1114.96
-      '2': 1272.6
-      '4': 1822.52
-      '8': 2678.48
+      '1': 1713.6
+      '2': 1834.56
+      '4': 2415.56
+      '8': 3285.52
     per: fifoDepth
   margin: 0.0395
   model: points-additive
   error:
     bound: 0.053
     sign: over
-    note: parameter curves stored as measured points, features added on top, then
-      lifted by 0.0395 so that no untested combination predicts under; the worst came
-      in 3.45 percent under before the lift
+    note: parameter curves stored as measured points, features added on top, 
+      then lifted by 0.0395 so that no untested combination predicts under; the 
+      worst came in 3.45 percent under before the lift
   measured:
   - at:
       fifoDepth: 1
       quad: false
       csWidth: 1
-    um2: 1114.96
+    um2: 1713.6
   - at:
       fifoDepth: 2
       quad: false
       csWidth: 1
-    um2: 1272.6
+    um2: 1834.56
   - at:
       fifoDepth: 4
       quad: false
       csWidth: 1
-    um2: 1822.52
+    um2: 2415.56
   - at:
       fifoDepth: 8
       quad: false
       csWidth: 1
-    um2: 2678.48
+    um2: 3285.52
   - at:
       fifoDepth: 1
       quad: true
       csWidth: 1
-    um2: 1188.32
+    um2: 1807.68
   - at:
       fifoDepth: 2
       quad: true
       csWidth: 1
-    um2: 1346.52
+    um2: 1989.4
   - at:
       fifoDepth: 4
       quad: true
       csWidth: 1
-    um2: 1991.36
+    um2: 2593.08
   - at:
       fifoDepth: 8
       quad: true
       csWidth: 1
-    um2: 2861.6
+    um2: 3438.96
   - at:
       fifoDepth: 8
       csWidth: 2
       quad: false
-    um2: 2704.24
+    um2: 3373.72
   - at:
       fifoDepth: 8
       csWidth: 4
       quad: false
-    um2: 2762.2
+    um2: 3332.28
   - at:
       fifoDepth: 8
       csWidth: 8
       quad: false
-    um2: 2822.12
+    um2: 3430.28
   corner:
     tool: ecc
     pdk: ics55
     freq_mhz: 100
-    measured: '2026-09-09'
-    gen_digest: sha256:1772f360181fd7db
+    measured: '2026-09-10'
+    gen_digest: sha256:48e70ef5a2ddf2de
   params:
     csWidth:
       points:
         '1': 0.0
-        '2': 25.76
-        '4': 83.72
-        '8': 143.64
+        '2': 88.2
+        '4': 46.76
+        '8': 144.76

@@ -85,11 +85,16 @@ endfunction
 
 Bit#(8) rSCKDIV = 8'h00;
 Bit#(8) rCSMODE = 8'h18;
+Bit#(8) rTXMARK = 8'h50;
+Bit#(8) rRXMARK = 8'h54;
+Bit#(8) rIP     = 8'h74;
 Bit#(8) rFMT    = 8'h40;
 Bit#(8) rTXDATA = 8'h48;
 Bit#(8) rRXDATA = 8'h4C;
 
-typedef enum {{ Setup, Send, Recv, DirSet, DirWait, DirCheck, Done }}
+typedef enum {{ Setup, Send, Recv, WmA, WmB, WmC, WmD, WmE,
+               CsOffA, CsOffB, CsOffC, CsHoldA, CsHoldB, CsHoldC, CsHoldD, Flush,
+               DirSet, DirWait, DirCheck, Done }}
   Phase deriving (Bits, Eq);
 
 (* synthesize *)
@@ -106,10 +111,17 @@ module mkSpi{label}Tb(Empty);
   Reg#(Bool)     sawCs <- mkReg(False);
 
   // 自环：IO0 出去的接回 IO1
+  Reg#(Bool) csNow  <- mkReg(False);
+  Reg#(Bool) csSaw[2] <- mkCReg(2, False);
+
   rule loop;
     Bit#(4) o = sp.pins.io_o;
     sp.pins.io_i({{2'b00, o[0], 1'b0}});
     if (sp.pins.cs_n != '1) sawCs <= True;
+    // 片选的快照：读 cs_n 的规则不能同时写寄存器（会被判永不触发），
+    // 所以在这里打一拍，检查规则只看寄存器
+    csNow <= (sp.pins.cs_n != '1);
+    if (sp.pins.cs_n != '1) csSaw[0] <= True;
   endrule
 
   rule timeout;
@@ -153,11 +165,122 @@ module mkSpi{label}Tb(Empty);
         bad <= True;
       end
       got <= got + 1;
-      if (got + 1 == fromInteger(nbytes)) begin ph <= {after_recv}; s <= 0; end
+      if (got + 1 == fromInteger(nbytes)) begin ph <= WmA; s <= 0; end
     end
   endrule
 
 {dir_phase}
+  // 19.15：rxwm 在接收队列**严格多于** rxmark 时才抬。门限取 1：
+  // 收到一个字节时不该抬（1 不大于 1），收到两个才该抬。
+  // 队列只装得下一个的那一点跳过——两个字节根本放不下。
+  rule wmA (ph == WmA);
+    if (fromInteger(nbytes) < 2) ph <= CsOffA;
+    else begin wr(rRXMARK, 1); ph <= WmB; s <= 0; end
+  endrule
+
+  rule wmB (ph == WmB);
+    wr(rTXDATA, 32'h0000005A);       // 自环回来一个字节
+    ph <= WmC;
+    s  <= 0;
+  endrule
+
+  rule wmC (ph == WmC);
+    if (s > {QUIET}) begin ph <= WmD; s <= 0; end else s <= s + 1;
+  endrule
+
+  rule wmD (ph == WmD);
+    case (s)
+      0: action
+           let x <- sp.regs.access(RegReq {{ addr: rIP, write: False,
+                                             wdata: 0, wstrb: 4'hF }});
+           if (x.rdata[1] != 0) begin
+             $display("FAIL one entry with rxmark=1 already raises rxwm");
+             bad <= True;
+           end
+         endaction
+      1: wr(rTXDATA, 32'h0000005A);   // 再来一个，凑到两条
+      default: begin ph <= WmE; s <= 0; end
+    endcase
+    if (s < 2) s <= s + 1;
+  endrule
+
+  rule wmE (ph == WmE);
+    if (s <= {QUIET}) s <= s + 1;
+    else begin
+      let x <- sp.regs.access(RegReq {{ addr: rIP, write: False,
+                                        wdata: 0, wstrb: 4'hF }});
+      if (x.rdata[1] != 1) begin
+        $display("FAIL two entries with rxmark=1 but rxwm stays low");
+        bad <= True;
+      end
+      ph <= CsOffA;
+      s  <= 0;
+    end
+  endrule
+
+  // 19.8 表 73：csmode = 3 是 OFF，硬件完全不碰片选
+  rule csOffA (ph == CsOffA);
+    wr(rCSMODE, 3);
+    csSaw[1] <= False;
+    ph <= CsOffB;
+  endrule
+
+  rule csOffB (ph == CsOffB);
+    wr(rTXDATA, 32'h0000005A);
+    ph <= CsOffC;
+    s  <= 0;
+  endrule
+
+  rule csOffC (ph == CsOffC);
+    if (s <= {QUIET}) s <= s + 1;
+    else begin
+      if (csSaw[1]) begin
+        $display("FAIL csmode is OFF but cs was asserted");
+        bad <= True;
+      end
+      ph <= CsHoldA;
+    end
+  endrule
+
+  // csmode = 2 是 HOLD：第一帧之后片选一直按住，不随帧起落
+  rule csHoldA (ph == CsHoldA);
+    wr(rCSMODE, 2);
+    ph <= CsHoldB;
+  endrule
+
+  rule csHoldB (ph == CsHoldB);
+    wr(rTXDATA, 32'h0000005A);
+    ph <= CsHoldC;
+    s  <= 0;
+  endrule
+
+  rule csHoldC (ph == CsHoldC);
+    if (s <= {QUIET}) s <= s + 1;
+    else begin
+      // 这一条只看快照、不碰总线：既读 cs_n 的快照又写 csmode 的话，
+      // 「排在采样规则之前」与「之后」会同时成立，bsc 把整条规则丢掉。
+      if (!csNow) begin
+        $display("FAIL csmode is HOLD but cs was released after the frame");
+        bad <= True;
+      end
+      ph <= CsHoldD;
+      s  <= 0;
+    end
+  endrule
+
+  rule csHoldD (ph == CsHoldD);
+    wr(rCSMODE, 0);                   // 放回 AUTO
+    ph <= Flush;
+  endrule
+
+  // 上面几段往接收队列里塞了字节。不读空的话，后面 quad 的 dir 检查
+  // 会把它们当成「只发却收到了」——那是这一台自己造出来的假失败。
+  rule flush (ph == Flush);
+    let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata[31] == 1) ph <= {after_recv};
+  endrule
+
   rule fin (ph == Done);
     if (!sawCs) begin
       $display("FAIL chip select never went low");
