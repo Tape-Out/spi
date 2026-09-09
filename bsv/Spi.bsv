@@ -50,6 +50,7 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   Wire#(Bit#(4))  ioIn  <- mkBypassWire;
   // HOLD 模式下片选已经按下了没有。写 csmode 或 csid 都放开（19.8）。
   Reg#(Bool)      csHeld <- mkConfigReg(False);
+  Reg#(Bool)      csWrPend <- mkReg(False);
 
   // 队列里有几条：FIFOF 不给计数，而入队与出队在不同规则里，共用一个计数器
   // 会抢同一个写口——各自一个自由计数器，相减即占用数。宽度够，回绕不影响差值。
@@ -81,9 +82,16 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     txIn <= txIn + 1;
   endrule
 
-  // 写 csmode 或 csid 就放开 HOLD 按住的片选；否则一开始传就按下
+  // 写脉冲与寄存器不能在同一条规则里读：前者逼着排在总线方法之后、后者逼着
+  // 排在之前，bsc 判规则永不触发（G0021，装配一级才现形）。与上面 mark/push
+  // 是同一条——先记脉冲，下一拍再动。
+  rule csMark;
+    csWrPend <= (r.csmode_wr || r.csid_wr);
+  endrule
+
+  // 写过 csmode 或 csid 就放开 HOLD 按住的片选；否则一开始传就按下
   rule csTrack;
-    if (r.csmode_wr || r.csid_wr) csHeld <= False;
+    if (csWrPend) csHeld <= False;
     else if (busy && r.csmode == 2) csHeld <= True;
   endrule
 

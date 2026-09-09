@@ -42,10 +42,10 @@ features:
     default: false
     area:
       points:
-        '1': 94.08
-        '2': 154.84
-        '4': 177.52
-        '8': 153.44
+        '1': 174.72
+        '2': 176.12
+        '4': 116.2
+        '8': 113.96
       per: fifoDepth
 emit:
 - kind: bsv
@@ -67,10 +67,10 @@ deps:
 area:
   base:
     points:
-      '1': 1713.6
-      '2': 1834.56
-      '4': 2415.56
-      '8': 3285.52
+      '1': 1662.36
+      '2': 1846.88
+      '4': 2449.44
+      '8': 3351.04
     per: fifoDepth
   margin: 0.0395
   model: points-additive
@@ -85,67 +85,67 @@ area:
       fifoDepth: 1
       quad: false
       csWidth: 1
-    um2: 1713.6
+    um2: 1662.36
   - at:
       fifoDepth: 2
       quad: false
       csWidth: 1
-    um2: 1834.56
+    um2: 1846.88
   - at:
       fifoDepth: 4
       quad: false
       csWidth: 1
-    um2: 2415.56
+    um2: 2449.44
   - at:
       fifoDepth: 8
       quad: false
       csWidth: 1
-    um2: 3285.52
+    um2: 3351.04
   - at:
       fifoDepth: 1
       quad: true
       csWidth: 1
-    um2: 1807.68
+    um2: 1837.08
   - at:
       fifoDepth: 2
       quad: true
       csWidth: 1
-    um2: 1989.4
+    um2: 2023.0
   - at:
       fifoDepth: 4
       quad: true
       csWidth: 1
-    um2: 2593.08
+    um2: 2565.64
   - at:
       fifoDepth: 8
       quad: true
       csWidth: 1
-    um2: 3438.96
+    um2: 3465.0
   - at:
       fifoDepth: 8
       csWidth: 2
       quad: false
-    um2: 3373.72
+    um2: 3335.08
   - at:
       fifoDepth: 8
       csWidth: 4
       quad: false
-    um2: 3332.28
+    um2: 3328.92
   - at:
       fifoDepth: 8
       csWidth: 8
       quad: false
-    um2: 3430.28
+    um2: 3418.24
   corner:
     tool: ecc
     pdk: ics55
     freq_mhz: 100
     measured: '2026-09-10'
-    gen_digest: sha256:48e70ef5a2ddf2de
+    gen_digest: sha256:fb55cc2e81a2cce7
   params:
     csWidth:
       points:
         '1': 0.0
-        '2': 88.2
-        '4': 46.76
-        '8': 144.76
+        '2': -15.96
+        '4': -22.12
+        '8': 67.2
