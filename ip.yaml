@@ -84,38 +84,68 @@ area:
   - at:
       fifoDepth: 1
       quad: false
+      csWidth: 1
     um2: 1114.96
   - at:
       fifoDepth: 2
       quad: false
+      csWidth: 1
     um2: 1272.6
   - at:
       fifoDepth: 4
       quad: false
+      csWidth: 1
     um2: 1822.52
   - at:
       fifoDepth: 8
       quad: false
+      csWidth: 1
     um2: 2678.48
   - at:
       fifoDepth: 1
       quad: true
+      csWidth: 1
     um2: 1188.32
   - at:
       fifoDepth: 2
       quad: true
+      csWidth: 1
     um2: 1346.52
   - at:
       fifoDepth: 4
       quad: true
+      csWidth: 1
     um2: 1991.36
   - at:
       fifoDepth: 8
       quad: true
+      csWidth: 1
     um2: 2861.6
+  - at:
+      fifoDepth: 8
+      csWidth: 2
+      quad: false
+    um2: 2704.24
+  - at:
+      fifoDepth: 8
+      csWidth: 4
+      quad: false
+    um2: 2762.2
+  - at:
+      fifoDepth: 8
+      csWidth: 8
+      quad: false
+    um2: 2822.12
   corner:
     tool: ecc
     pdk: ics55
     freq_mhz: 100
     measured: '2026-09-09'
     gen_digest: sha256:1772f360181fd7db
+  params:
+    csWidth:
+      points:
+        '1': 0.0
+        '2': 25.76
+        '4': 83.72
+        '8': 143.64
