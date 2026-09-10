@@ -72,6 +72,12 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   // 帧长只有开了 quad 才可配，否则恒 8 位
   Bit#(4) flen = cfg.quad ? (r.fmt_len == 0 ? 8 : r.fmt_len) : 8;
 
+  // 位序（19.10 表 78）。取哪一位与往哪边移是**同一个决定**：取第 0 位就得右移。
+  // 原来无论位序都左移，于是低位先出那一档线上只出得来真正的第 0 位、
+  // 后面七位全是零，收回来也是错位的。手册还要求 len < 8 时低位先出右对齐，
+  // 右移正好满足。
+  Bool lsb = cfg.quad && r.fmt_endian == 1;
+
   // swmod 的脉冲与寄存器的新值差一拍，先记脉冲、下一拍再取值
   rule mark;
     txPend <= r.txdata_data_wr;
@@ -114,9 +120,9 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
       // pha=0 在前沿采样、后沿移位；pha=1 反过来
       Bool sampleNow = (r.sckmode_pha == 0) ? !half : half;
       if (sampleNow)
-        shRx <= {shRx[6:0], ioIn[1]};
+        shRx <= lsb ? {ioIn[1], shRx[7:1]} : {shRx[6:0], ioIn[1]};
       else
-        shTx <= {shTx[6:0], 1'b0};
+        shTx <= lsb ? {1'b0, shTx[7:1]} : {shTx[6:0], 1'b0};
       if (half) begin
         if (bitn + 1 == flen) begin
           busy <= False;
@@ -160,8 +166,7 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     method Bit#(csWidth) cs_n =
       (r.csmode == 3) ? '1
       : ((busy || (r.csmode == 2 && csHeld)) ? ~(1 << r.csid) : '1);
-    method Bit#(4) io_o  = {3'b000, r.fmt_endian == 1 && cfg.quad
-                                    ? shTx[0] : shTx[7]};
+    method Bit#(4) io_o  = {3'b000, lsb ? shTx[0] : shTx[7]};
     // 四线模式下收方向要放开全部四根，否则主机与从机对着驱动
     method Bit#(4) io_oe = (cfg.quad && r.fmt_proto == 2)
                          ? (recvOnly ? 4'b0000 : 4'b1111) : 4'b0001;

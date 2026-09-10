@@ -53,10 +53,41 @@ if quad:
                x.rdata[7:0]);
       bad <= True;
     end
+    ph <= LsbSet;
+    s  <= 0;
+  endrule
+
+  // 低位先出（19.10 表 78）。移位方向必须跟着 endian 走：取的是第 0 位就得右移。
+  // 取第 0 位却左移的话，线上只出得来真正的第 0 位，后面七位全是零——
+  // 而这一档此前一次都没被走过。
+  rule lsbSet (ph == LsbSet);
+    case (s)
+      0: wr(rFMT, 32'h00080004);      // len = 8、endian = 1（低位先出）、dir = 0
+      1: wr(rTXDATA, 32'h000000A5);   // 0xA5 高低位不对称，转了看得出来
+      default: begin ph <= LsbWait; end
+    endcase
+    if (s < 2) s <= s + 1; else s <= 0;
+  endrule
+
+  rule lsbWait (ph == LsbWait);
+    if (s > {QUIET}) begin ph <= LsbCheck; s <= 0; end
+    else s <= s + 1;
+  endrule
+
+  rule lsbCheck (ph == LsbCheck);
+    let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata[31] == 1) begin
+      $display("FAIL nothing came back with lsb first");
+      bad <= True;
+    end else if (x.rdata[7:0] != 8'hA5) begin
+      $display("FAIL lsb first loops back %02h, want a5", x.rdata[7:0]);
+      bad <= True;
+    end
     ph <= Done;
   endrule
 '''
-    verdict = "loopback, chip select, and a send only frame keeps nothing"
+    verdict = "loopback both ways round, chip select, and a send only frame keeps nothing"
     after_recv = "DirSet"
 else:
     dir_phase = '''  rule dirSet (ph == DirSet);
@@ -94,7 +125,7 @@ Bit#(8) rRXDATA = 8'h4C;
 
 typedef enum {{ Setup, Send, Recv, WmA, WmB, WmC, WmD, WmE,
                CsOffA, CsOffB, CsOffC, CsHoldA, CsHoldB, CsHoldC, CsHoldD, Flush,
-               DirSet, DirWait, DirCheck, Done }}
+               DirSet, DirWait, DirCheck, LsbSet, LsbWait, LsbCheck, Done }}
   Phase deriving (Bits, Eq);
 
 (* synthesize *)
