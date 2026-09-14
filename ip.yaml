@@ -42,10 +42,10 @@ features:
     default: false
     area:
       points:
-        '1': 194.32
-        '2': 185.64
-        '4': 229.32
-        '8': 183.4
+        '1': 166.04
+        '2': 169.4
+        '4': 124.04
+        '8': 165.2
       per: fifoDepth
 emit:
 - kind: bsv
@@ -67,10 +67,10 @@ deps:
 area:
   base:
     points:
-      '1': 1662.36
-      '2': 1846.88
-      '4': 2449.44
-      '8': 3351.04
+      '1': 2477.16
+      '2': 2614.36
+      '4': 3230.64
+      '8': 4063.36
     per: fifoDepth
   margin: 0.0395
   model: points-additive
@@ -85,68 +85,68 @@ area:
       fifoDepth: 1
       quad: false
       csWidth: 1
-    um2: 1662.36
+    um2: 2477.16
   - at:
       fifoDepth: 2
       quad: false
       csWidth: 1
-    um2: 1846.88
+    um2: 2614.36
   - at:
       fifoDepth: 4
       quad: false
       csWidth: 1
-    um2: 2449.44
+    um2: 3230.64
   - at:
       fifoDepth: 8
       quad: false
       csWidth: 1
-    um2: 3351.04
+    um2: 4063.36
   - at:
       fifoDepth: 1
       quad: true
       csWidth: 1
-    um2: 1856.68
+    um2: 2643.2
   - at:
       fifoDepth: 2
       quad: true
       csWidth: 1
-    um2: 2032.52
+    um2: 2783.76
   - at:
       fifoDepth: 4
       quad: true
       csWidth: 1
-    um2: 2678.76
+    um2: 3354.68
   - at:
       fifoDepth: 8
       quad: true
       csWidth: 1
-    um2: 3534.44
+    um2: 4228.56
   - at:
       fifoDepth: 8
       csWidth: 2
       quad: false
-    um2: 3335.08
+    um2: 4125.8
   - at:
       fifoDepth: 8
       csWidth: 4
       quad: false
-    um2: 3328.92
+    um2: 4223.8
   - at:
       fifoDepth: 8
       csWidth: 8
       quad: false
-    um2: 3418.24
+    um2: 4511.36
   corner:
     tool: ecc
     pdk: ics55
     freq_mhz: 100
-    measured: '2026-09-11'
+    measured: '2026-09-14'
     toolchain: bsc 2026.01 · yosys 0.68+195 · ecc 0.1.0a11
-    gen_digest: sha256:fd50047748296658
+    gen_digest: sha256:c7b153f521fec083
   params:
     csWidth:
       points:
         '1': 0.0
-        '2': -15.96
-        '4': -22.12
-        '8': 67.2
+        '2': 62.44
+        '4': 160.44
+        '8': 448.0

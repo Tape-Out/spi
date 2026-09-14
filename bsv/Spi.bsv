@@ -10,6 +10,9 @@ typedef struct {
   Bool quad;
 } SpiCfg;
 
+// 一帧的节拍（19.9）。Lead、Tail、Rest、Gap 各数一段延时，单位都是一个 SCK 周期
+typedef enum { Idle, Lead, Load, Xfer, Tail, Rest, Gap } Beat deriving (Bits, Eq);
+
 // 四根数据线一直在接口上，单线模式只用到 io[0] 与 io[1]——真实的 QSPI 焊盘就是
 // 这么接的（MOSI=IO0，MISO=IO1），单线时把 IO2/IO3 的方向关掉即可。
 interface SpiPins#(numeric type csWidth);
@@ -36,21 +39,33 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   SpiRegsIfc#(aw, dw, fifoDepth, csWidth) r <- mkSpiRegs(
       SpiRegsCfg { quad: cfg.quad });
 
-  // 去守卫按端口给：软件那一端走 always_ready 的总线方法，硬件那一端走规则
+  // 去守卫按端口给：软件那一端走 always_ready 的总线方法，硬件那一端走规则。
+  // 接收的入队也去守卫：带守卫时 notFull 被提到整条移位规则头上，接收队列一满
+  // 时钟就停在帧中间，只发不读的软件发满 fifoDepth 帧就卡死。满了就丢这一帧，
+  // 与 sifive-blocks 一致
   FIFOF#(Bit#(8)) txq <- mkGSizedFIFOF(True,  False, valueOf(fifoDepth));
-  FIFOF#(Bit#(8)) rxq <- mkGSizedFIFOF(False, True,  valueOf(fifoDepth));
+  FIFOF#(Bit#(8)) rxq <- mkGSizedFIFOF(True,  True,  valueOf(fifoDepth));
 
-  Reg#(Bool)      busy  <- mkConfigReg(False);
+  Reg#(Beat)     st    <- mkConfigReg(Idle);
+  Reg#(Bit#(8))   dly   <- mkReg(0);
   Reg#(Bit#(12))  div   <- mkReg(0);
-  Reg#(Bool)      half  <- mkReg(False);   // 一位两个半周期
+  Reg#(Bool)      half  <- mkReg(False);   // 一位两个半周期，延时也按半周期数
   Reg#(Bit#(4))   bitn  <- mkReg(0);
   Reg#(Bit#(8))   shTx  <- mkReg(0);
   Reg#(Bit#(8))   shRx  <- mkReg(0);
   Reg#(Bool)      txPend <- mkReg(False);
   Wire#(Bit#(4))  ioIn  <- mkBypassWire;
-  // HOLD 模式下片选已经按下了没有。写 csmode 或 csid 都放开（19.8）。
-  Reg#(Bool)      csHeld <- mkConfigReg(False);
-  Reg#(Bool)      csWrPend <- mkReg(False);
+
+  // 片选由硬件按着没有，以及按下那一刻各根的电平。按住期间 csid、csdef 再变，
+  // 引脚不跟着跳：先走完 sckcs 再放开、再数 intercs（19.8、19.9）
+  Reg#(Bool)          csOn   <- mkConfigReg(False);
+  Reg#(Bit#(csWidth)) csAct  <- mkConfigReg('1);
+  Reg#(Bool)          csDrop[2] <- mkCReg(2, False);
+  // 放开条件是「写进了不同的值」，写同一个值不算。每拍留一份上一拍的值来比，
+  // 这样也不必在同一条规则里既读写脉冲又读寄存器（G0021）
+  Reg#(Bit#(csWidth)) idWas   <- mkReg(0);
+  Reg#(Bit#(2))       modeWas <- mkReg(0);
+  Reg#(Bit#(csWidth)) defWas  <- mkReg('1);
 
   // 队列里有几条：FIFOF 不给计数，而入队与出队在不同规则里，共用一个计数器
   // 会抢同一个写口——各自一个自由计数器，相减即占用数。宽度够，回绕不影响差值。
@@ -73,10 +88,11 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   Bit#(4) flen = cfg.quad ? (r.fmt_len == 0 ? 8 : r.fmt_len) : 8;
 
   // 位序（19.10 表 78）。取哪一位与往哪边移是**同一个决定**：取第 0 位就得右移。
-  // 原来无论位序都左移，于是低位先出那一档线上只出得来真正的第 0 位、
-  // 后面七位全是零，收回来也是错位的。手册还要求 len < 8 时低位先出右对齐，
-  // 右移正好满足。
+  // 手册还要求 len < 8 时低位先出右对齐，右移正好满足。
   Bool lsb = cfg.quad && r.fmt_endian == 1;
+
+  // 表 73：只有 HOLD 与 OFF 帧后不放片选，保留的 1 按 AUTO 走
+  Bool keep = r.csmode == 2 || r.csmode == 3;
 
   // swmod 的脉冲与寄存器的新值差一拍，先记脉冲、下一拍再取值
   rule mark;
@@ -88,52 +104,92 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     txIn <= txIn + 1;
   endrule
 
-  // 写脉冲与寄存器不能在同一条规则里读：前者逼着排在总线方法之后、后者逼着
-  // 排在之前，bsc 判规则永不触发（G0021，装配一级才现形）。与上面 mark/push
-  // 是同一条——先记脉冲，下一拍再动。
-  rule csMark;
-    csWrPend <= (r.csmode_wr || r.csid_wr);
-  endrule
-
-  // 写过 csmode 或 csid 就放开 HOLD 按住的片选；否则一开始传就按下
   rule csTrack;
-    if (csWrPend) csHeld <= False;
-    else if (busy && r.csmode == 2) csHeld <= True;
+    idWas   <= r.csid;
+    modeWas <= r.csmode;
+    defWas  <= r.csdef;
+    Bool moved = r.csid != idWas || r.csmode != modeWas
+              || ((r.csdef ^ defWas) & (1 << r.csid)) != 0;
+    if (moved && csOn) csDrop[0] <= True;
   endrule
 
-  rule begin_frame (!busy && txq.notEmpty);
+  // 该放的先放；有帧要发时，没按着就按下再数 cssck，按着或 OFF 就直接装帧
+  rule idle (st == Idle);
+    if (csOn && (csDrop[1] || !keep)) begin
+      st   <= Tail;
+      dly  <= r.delay0_sckcs;
+      div  <= r.sckdiv;
+      half <= False;
+    end else if (txq.notEmpty) begin
+      if (csOn || r.csmode == 3)
+        st <= Load;
+      else begin
+        csOn  <= True;
+        csAct <= r.csdef ^ (1 << r.csid);
+        st    <= Lead;
+        dly   <= r.delay0_cssck;
+        div   <= r.sckdiv;
+        half  <= False;
+      end
+    end
+  endrule
+
+  rule load (st == Load);
     shTx  <= txq.first;
     txq.deq;
     txOut <= txOut + 1;
-    busy  <= True;
+    st    <= Xfer;
     half  <= False;
     bitn  <= 0;
     div   <= r.sckdiv;
   endrule
 
-  rule step (busy);
+  Bool waiting = st == Lead || st == Tail || st == Rest || st == Gap;
+
+  rule tick (waiting && dly != 0);
     if (div != 0)
       div <= div - 1;
     else begin
       div  <= r.sckdiv;
       half <= !half;
-      // pha=0 在前沿采样、后沿移位；pha=1 反过来
-      Bool sampleNow = (r.sckmode_pha == 0) ? !half : half;
-      if (sampleNow)
+      if (half) dly <= dly - 1;
+    end
+  endrule
+
+  rule waited (waiting && dly == 0);
+    case (st)
+      Lead: st <= Load;
+      Tail: begin
+        st   <= Rest;
+        csOn <= False;
+        csDrop[1] <= False;
+        dly  <= r.delay1_intercs;
+        div  <= r.sckdiv;
+        half <= False;
+      end
+      default: st <= Idle;
+    endcase
+  endrule
+
+  rule step (st == Xfer);
+    if (div != 0)
+      div <= div - 1;
+    else begin
+      div  <= r.sckdiv;
+      half <= !half;
+      // 每一位前半拍末采样、后半拍末移位；pha 只翻 SCK 在两个半拍里的电平（见 sck）。
+      // 于是 pha = 0 采样落在前沿、pha = 1 落在后沿，而 pha = 1 的第一个前沿就是帧头，
+      // 手册里 cssck 与 sckcs 各自那半个隐含周期由此而来。原来让 pha 去换采样与
+      // 移位的先后：第一个前沿就把最高位移走，收尾那次采样也赶不上入队，收发都错一位
+      if (!half)
         shRx <= lsb ? {ioIn[1], shRx[7:1]} : {shRx[6:0], ioIn[1]};
-      else
+      else if (bitn + 1 == flen) begin
+        if (!sendOnly && rxq.notFull) begin rxq.enq(shRx); rxIn <= rxIn + 1; end
+        st  <= keep ? Gap : Tail;
+        dly <= keep ? r.delay1_interxfr : r.delay0_sckcs;
+      end else begin
         shTx <= lsb ? {1'b0, shTx[7:1]} : {shTx[6:0], 1'b0};
-      if (half) begin
-        if (bitn + 1 == flen) begin
-          busy <= False;
-          // shRx 到这一拍已经攒够八位了：一个位周期是「先采样、后移位」，
-          // 收尾这一拍走的是移位那一边，采样早在上半拍做完。
-          // 这里再补一次采样就等于把整个字节循环左移一位——
-          // 0xA5 收回来成 0x4B，而 0x00 与 0xFF 转不转都一样，所以只有
-          // 非对称的字节看得出来。
-          if (!sendOnly && rxq.notFull) begin rxq.enq(shRx); rxIn <= rxIn + 1; end
-        end else
-          bitn <= bitn + 1;
+        bitn <= bitn + 1;
       end
     end
   endrule
@@ -155,17 +211,15 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     rxOut <= rxOut + 1;
   endrule
 
+  Bit#(1) phase = pack(half);
+
   interface regs = r.regs;
   interface SpiPins pins;
-    // 空闲电平由 pol 定；csmode 为 2 时片选常抬，给软件手动控时序留口子
-    method Bit#(1) sck = busy ? (half ? ~r.sckmode_pol : r.sckmode_pol)
-                              : r.sckmode_pol;
-    // 19.8 表 73：0=AUTO 一帧一起一落 · 2=HOLD 第一帧之后一直按住 ·
-    // 3=OFF 硬件完全不管。原来写的是 `busy && csmode != 2`——
-    // HOLD 从不拉低、OFF 反而跟着帧起落，两个模式的行为正好错位。
-    method Bit#(csWidth) cs_n =
-      (r.csmode == 3) ? '1
-      : ((busy || (r.csmode == 2 && csHeld)) ? ~(1 << r.csid) : '1);
+    method Bit#(1) sck = (st == Xfer) ? (r.sckmode_pol ^ r.sckmode_pha ^ phase)
+                                      : r.sckmode_pol;
+    // 表 73 与 19.7：非活动电平由 csdef 给；OFF 时硬件不碰，引脚停在 csdef 上，
+    // 软件改 csdef 就能自己控片选
+    method Bit#(csWidth) cs_n = (csOn && r.csmode != 3) ? csAct : r.csdef;
     method Bit#(4) io_o  = {3'b000, lsb ? shTx[0] : shTx[7]};
     // 四线模式下收方向要放开全部四根，否则主机与从机对着驱动
     method Bit#(4) io_oe = (cfg.quad && r.fmt_proto == 2)

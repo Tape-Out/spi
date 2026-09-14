@@ -14,15 +14,34 @@ regs:
     fields:
       - { name: pha, bits: "0:0", sw: rw, hw: r, reset: 0 }
       - { name: pol, bits: "1:1", sw: rw, hw: r, reset: 0 }
-  # swmod：写 csid 或 csmode 都要放开 HOLD 按住的片选（19.8 的三条之一）
+  # 19.8：HOLD 按住的片选在 csid、csmode 写进不同的值，或 csdef 改到选中那一根时放开。
+  # 看的是值变没变，写同一个值不算，所以不要写脉冲
   - name: csid
     offset: 0x10
     desc: chip select index
-    fields: [ { name: val, width: csWidth, sw: rw, hw: r, reset: 0, swmod: true } ]
+    fields: [ { name: val, width: csWidth, sw: rw, hw: r, reset: 0 } ]
+  # 19.7：各根片选的非活动电平，复位全一。-1 按字段宽度取二补码
+  - name: csdef
+    offset: 0x14
+    desc: chip select inactive levels
+    fields: [ { name: val, width: csWidth, sw: rw, hw: r, reset: -1 } ]
   - name: csmode
     offset: 0x18
     desc: chip select behaviour
-    fields: [ { name: val, bits: "1:0", sw: rw, hw: r, reset: 0, swmod: true } ]
+    fields: [ { name: val, bits: "1:0", sw: rw, hw: r, reset: 0 } ]
+  # 19.9：四段延时，单位是一个 SCK 周期
+  - name: delay0
+    offset: 0x28
+    desc: chip select to clock, and clock to chip select release
+    fields:
+      - { name: cssck, bits: "7:0",   sw: rw, hw: r, reset: 1 }
+      - { name: sckcs, bits: "23:16", sw: rw, hw: r, reset: 1 }
+  - name: delay1
+    offset: 0x2C
+    desc: chip select inactive time, and gap between held frames
+    fields:
+      - { name: intercs,  bits: "7:0",   sw: rw, hw: r, reset: 1 }
+      - { name: interxfr, bits: "23:16", sw: rw, hw: r, reset: 0 }
   - name: fmt
     offset: 0x40
     desc: frame format

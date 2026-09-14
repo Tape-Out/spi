@@ -6,6 +6,10 @@
 帧方向那一段只在 quad 开着时跑（那个寄存器本来就被 quad 门控）：`dir = 1` 是
 只发，线上回来的必须丢掉。原来的实现不看这一位，收到的照收，这一步就会露馅。
 
+片选与时序（19.6 至 19.9）：pha = 1 的自环；csdef 的复位值与极性；HOLD 只在值真的
+变了时放开；四段延时各量一次引脚。延时量的是**差值**，比如 cssck 从 1 调到 3，
+首个时钟沿要恰好晚两个周期：装帧那一两拍的固定开销在两边抵掉，判据可以写成等式。
+
 认矩阵：`fifoDepth`、`csWidth`、`quad` 都从这一点的旋钮来。
 """
 import json
@@ -25,6 +29,17 @@ BYTES = [0xA5, 0x00, 0xFF, 0x3C]
 # 这一台是「先全发完再全读出」，发多了接收队列会溢出丢字节
 NSEND = min(len(BYTES), depth)
 QUIET = 600
+# 片选的放开要走完 sckcs 才落到引脚上，等这么久足够
+SETTLE = 64
+# 量延时用的分频：半个周期 H 拍，一个周期 2H 拍
+DIV = 4
+H = DIV + 1
+CSALL = (1 << csw) - 1
+other = csw >= 2
+# 两帧紧挨着发，队列得装得下两个
+two = depth >= 2
+# 只发不读时要发的帧数：比接收队列多两帧，满了还卡不卡一眼看得出来
+NOVF = depth + 2
 
 lst = chr(10).join(f"      {i}: return 8'h{b:02X};" for i, b in enumerate(BYTES))
 
@@ -87,18 +102,322 @@ if quad:
     ph <= Done;
   endrule
 '''
-    verdict = "loopback both ways round, chip select, and a send only frame keeps nothing"
-    after_recv = "DirSet"
+    verdict = ("loopback both ways round and at pha=1, chip select default level and hold release, "
+               "the four delays, and a send only frame keeps nothing")
 else:
     dir_phase = '''  rule dirSet (ph == DirSet);
     ph <= Done;                      // 没开 quad，帧格式寄存器不存在
   endrule
 '''
-    verdict = "loopback and chip select"
-    after_recv = "DirSet"
+    verdict = "loopback at both phases, chip select default level and hold release, and the four delays"
+
+hold_other = f'''  // 只改另一根的默认电平：选中那一根的状态没变，片选得继续按住
+  rule holdH (ph == HoldH);
+    wr(rCSDEF, 32'h{CSALL ^ 2:08X});
+    ph <= HoldI;
+    s  <= 0;
+  endrule
+
+  rule holdI (ph == HoldI);
+    if (s < {SETTLE}) s <= s + 1;
+    else begin
+      if (csPins[0] != 0) begin
+        $display("FAIL a csdef write that leaves the selected pin alone released it");
+        bad <= True;
+      end
+      ph <= HoldJ;
+      s  <= 0;
+    end
+  endrule
+''' if other else ""
+
+# 检查只看快照、不碰总线：既读引脚快照又写总线的规则会被判永不触发，与 csHoldC 同理
+cs_phase = f'''  // 19.6 表 69：pha = 1 是前沿移位、后沿采样。此前所有判据都跑在 pha = 0 上
+  rule phaA (ph == PhaA);
+    case (s)
+      0: wr(rSCKMODE, 1);
+      1: wr(rTXDATA, 32'h000000A5);
+      default: ph <= PhaB;
+    endcase
+    if (s < 2) s <= s + 1; else s <= 0;
+  endrule
+
+  rule phaB (ph == PhaB);
+    if (s > {QUIET}) begin ph <= PhaC; s <= 0; end
+    else s <= s + 1;
+  endrule
+
+  rule phaC (ph == PhaC);
+    let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata[31] == 1) begin
+      $display("FAIL nothing came back with pha=1");
+      bad <= True;
+    end else if (x.rdata[7:0] != 8'hA5) begin
+      $display("FAIL with pha=1 the loop returns %02h, want a5", x.rdata[7:0]);
+      bad <= True;
+    end
+    ph <= PhaD;
+  endrule
+
+  rule phaD (ph == PhaD);
+    wr(rSCKMODE, 0);
+    ph <= CsdA;
+  endrule
+
+  // 19.7：csdef 复位全一
+  rule csdA (ph == CsdA);
+    let x <- sp.regs.access(RegReq {{ addr: rCSDEF, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata != 32'h{CSALL:08X}) begin
+      $display("FAIL csdef reads %08h after reset, want {CSALL:08x}", x.rdata);
+      bad <= True;
+    end
+    ph <= CsdB;
+  endrule
+
+  // 非活动电平跟着 csdef 走：写零以后空闲时全低，传输时选中那一根翻高
+  rule csdB (ph == CsdB);
+    wr(rCSDEF, 0);
+    ph <= CsdC;
+    s  <= 0;
+  endrule
+
+  rule csdC (ph == CsdC);
+    if (s < {SETTLE}) s <= s + 1;
+    else begin
+      if (csPins != 0) begin
+        $display("FAIL with csdef=0 the idle chip select pins read %b, want all low", csPins);
+        bad <= True;
+      end
+      ph <= CsdD;
+    end
+  endrule
+
+  rule csdD (ph == CsdD);
+    wr(rTXDATA, 32'h0000005A);
+    csHi[1] <= False;
+    ph <= CsdE;
+    s  <= 0;
+  endrule
+
+  rule csdE (ph == CsdE);
+    if (s <= {QUIET}) s <= s + 1;
+    else begin
+      if (!csHi[1]) begin
+        $display("FAIL with csdef=0 the selected chip select never went high during a frame");
+        bad <= True;
+      end
+      ph <= CsdF;
+    end
+  endrule
+
+  rule csdF (ph == CsdF);
+    wr(rCSDEF, 32'h{CSALL:08X});
+    ph <= HoldA;
+  endrule
+
+  // 19.8：HOLD 只在值真的变了时放开
+  rule holdA (ph == HoldA);
+    wr(rCSMODE, 2);
+    ph <= HoldB;
+  endrule
+
+  rule holdB (ph == HoldB);
+    wr(rTXDATA, 32'h0000005A);
+    ph <= HoldC;
+    s  <= 0;
+  endrule
+
+  rule holdC (ph == HoldC);
+    if (s <= {QUIET}) s <= s + 1;
+    else begin
+      if (csPins[0] != 0) begin
+        $display("FAIL the chip select was not held before the same-value writes");
+        bad <= True;
+      end
+      ph <= HoldD;
+    end
+  endrule
+
+  rule holdD (ph == HoldD);
+    wr(rCSMODE, 2);
+    ph <= HoldE;
+    s  <= 0;
+  endrule
+
+  rule holdE (ph == HoldE);
+    if (s < {SETTLE}) s <= s + 1;
+    else begin
+      if (csPins[0] != 0) begin
+        $display("FAIL writing the same value to csmode released the held chip select");
+        bad <= True;
+      end
+      ph <= HoldF;
+    end
+  endrule
+
+  rule holdF (ph == HoldF);
+    wr(rCSID, 0);
+    ph <= HoldG;
+    s  <= 0;
+  endrule
+
+  rule holdG (ph == HoldG);
+    if (s < {SETTLE}) s <= s + 1;
+    else begin
+      if (csPins[0] != 0) begin
+        $display("FAIL writing the same value to csid released the held chip select");
+        bad <= True;
+      end
+      ph <= {"HoldH" if other else "HoldJ"};
+      s  <= 0;
+    end
+  endrule
+
+{hold_other}
+  // 改选中那一根的默认电平就放开。按住时引脚锁在按下那一刻，放开与否在引脚上
+  // 看不出来（两边都是低），要看下一帧：放开了才会按新的极性重新按下，第 0 根翻高
+  rule holdJ (ph == HoldJ);
+    wr(rCSDEF, 32'h{CSALL ^ 1:08X});
+    ph <= HoldJ2;
+    s  <= 0;
+  endrule
+
+  rule holdJ2 (ph == HoldJ2);
+    if (s < {SETTLE}) s <= s + 1;
+    else ph <= HoldJ3;
+  endrule
+
+  rule holdJ3 (ph == HoldJ3);
+    wr(rTXDATA, 32'h0000005A);
+    csHi[1] <= False;
+    ph <= HoldK;
+    s  <= 0;
+  endrule
+
+  rule holdK (ph == HoldK);
+    if (s <= {QUIET}) s <= s + 1;
+    else begin
+      if (!csHi[1]) begin
+        $display("FAIL a csdef write that flips the selected pin did not release it: the next frame ran under the old chip select");
+        bad <= True;
+      end
+      ph <= HoldL;
+    end
+  endrule
+
+  rule holdL (ph == HoldL);
+    wr(rCSDEF, 32'h{CSALL:08X});
+    ph <= HoldM;
+  endrule
+
+  rule holdM (ph == HoldM);
+    wr(rCSMODE, 0);
+    ph <= Flush2;
+    s  <= 0;
+  endrule
+
+  // 上面几帧又往接收队列里塞了字节，量延时之前读空
+  rule flush2 (ph == Flush2);
+    let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata[31] == 1) begin ph <= R0W; s <= 0; end
+  endrule
+'''
+
+# 19.9：每一轮先写寄存器，再发一或两帧，等静下来，把监视器量到的数存进自己的槽
+REG = {"sckdiv": "rSCKDIV", "sckmode": "rSCKMODE", "csmode": "rCSMODE",
+       "delay0": "rDELAY0", "delay1": "rDELAY1"}
+runs = [
+    ("leadA", [("sckdiv", DIV), ("sckmode", 0), ("csmode", 0),
+               ("delay0", 0x00010001), ("delay1", 0x00000001)], 1, "mLead"),
+    ("leadB", [("sckmode", 1)], 1, "mLead"),
+    ("leadC", [("sckmode", 0), ("delay0", 0x00010003)], 1, "mLead"),
+    ("tailA", [("delay0", 0x00010001)], 1, "mTail"),
+    ("tailB", [("sckmode", 1)], 1, "mTail"),
+    ("tailC", [("sckmode", 0), ("delay0", 0x00030001)], 1, "mTail"),
+]
+if two:
+    runs += [
+        ("inactA", [("delay0", 0x00010001), ("delay1", 0x00000001)], 2, "mInact"),
+        ("inactC", [("delay1", 0x00000003)], 2, "mInact"),
+        # HOLD 下两帧之间的空当；interxfr 不是放开条件，改它片选照样按住
+        ("gapA", [("delay1", 0x00000001), ("csmode", 2)], 2, "mGap"),
+        ("gapB", [("delay1", 0x00020001)], 2, "mGap"),
+        # AUTO 下 interxfr 不起作用（19.9：只用于 HOLD 与 OFF）
+        ("autoA", [("csmode", 0), ("delay1", 0x00000001)], 2, "mGap"),
+        ("autoB", [("delay1", 0x00020001)], 2, "mGap"),
+    ]
+
+run_rules = []
+for i, (name, writes, frames, metric) in enumerate(runs):
+    nxt = f"R{i + 1}W" if i + 1 < len(runs) else "TmChk"
+    case = chr(10).join(f"      {j}: wr({REG[r]}, 32'h{v:08X});" for j, (r, v) in enumerate(writes))
+    run_rules.append(f'''  rule r{i}w (ph == R{i}W);
+    case (s)
+{case}
+      default: ph <= R{i}S;
+    endcase
+    if (s < {len(writes)}) s <= s + 1; else s <= 0;
+  endrule
+
+  rule r{i}s (ph == R{i}S);
+    wr(rTXDATA, 32'h0000005A);
+    if (s + 1 >= {frames}) begin ph <= R{i}Q; s <= 0; end else s <= s + 1;
+  endrule
+
+  rule r{i}q (ph == R{i}Q);
+    if (s > {QUIET}) begin ph <= R{i}M; s <= 0; end else s <= s + 1;
+  endrule
+
+  rule r{i}m (ph == R{i}M);
+    v{name} <= {metric};
+    ph <= {nxt};
+  endrule
+''')
+
+checks = [
+    (f"vleadA - vleadB != {H}",
+     "with pha=0 the first clock edge should trail cs by half a period more than with pha=1: %0d and %0d cycles",
+     "vleadA, vleadB"),
+    (f"vleadB < {2 * H}",
+     "cssck=1 put only %0d cycles between cs and the first clock edge, less than a period", "vleadB"),
+    (f"vleadC - vleadA != {4 * H}",
+     "cssck=3 should put the first clock edge two periods later than cssck=1: %0d and %0d cycles",
+     "vleadC, vleadA"),
+    (f"vtailB - vtailA != {H}",
+     "with pha=1 cs should be released half a period later after the last clock edge than with pha=0: %0d and %0d cycles",
+     "vtailB, vtailA"),
+    (f"vtailC - vtailA != {4 * H}",
+     "sckcs=3 should release cs two periods later than sckcs=1: %0d and %0d cycles", "vtailC, vtailA"),
+]
+if two:
+    checks += [
+        (f"vinactA < {2 * H}",
+         "intercs=1 kept cs inactive for only %0d cycles, less than a period", "vinactA"),
+        (f"vinactC - vinactA != {4 * H}",
+         "intercs=3 should keep cs inactive two periods longer than intercs=1: %0d and %0d cycles",
+         "vinactC, vinactA"),
+        (f"vgapB - vgapA != {4 * H}",
+         "in HOLD, interxfr=2 should put two more periods between frames than interxfr=0: %0d and %0d cycles",
+         "vgapB, vgapA"),
+        ("vautoB != vautoA",
+         "in AUTO the gap between frames moved with interxfr, which applies only to HOLD and OFF: %0d and %0d cycles",
+         "vautoB, vautoA"),
+    ]
+# 并列的 if 各写一次 bad 会被判并行冲突（G0004），先攒进局部变量
+chk = "    Bool wrong = False;" + chr(10) + chr(10).join(f'''    if ({c}) begin
+      $display("FAIL {m}", {a});
+      wrong = True;
+    end''' for c, m, a in checks) + chr(10) + "    if (wrong) bad <= True;"
+
+slots = chr(10).join(f"  Reg#(Bit#(32)) v{name} <- mkReg(0);" for name, *_ in runs)
+run_names = ", ".join(f"R{i}W, R{i}S, R{i}Q, R{i}M" for i in range(len(runs)))
 
 txt = f'''package Spi{label}Tb;
 
+import ConfigReg::*;
 import RegIf::*;
 import Spi::*;
 
@@ -114,17 +433,26 @@ function Bit#(8) want(Bit#(8) i);
   endcase
 endfunction
 
-Bit#(8) rSCKDIV = 8'h00;
-Bit#(8) rCSMODE = 8'h18;
-Bit#(8) rTXMARK = 8'h50;
-Bit#(8) rRXMARK = 8'h54;
-Bit#(8) rIP     = 8'h74;
-Bit#(8) rFMT    = 8'h40;
-Bit#(8) rTXDATA = 8'h48;
-Bit#(8) rRXDATA = 8'h4C;
+Bit#(8) rSCKDIV  = 8'h00;
+Bit#(8) rSCKMODE = 8'h04;
+Bit#(8) rCSID    = 8'h10;
+Bit#(8) rCSDEF   = 8'h14;
+Bit#(8) rCSMODE  = 8'h18;
+Bit#(8) rDELAY0  = 8'h28;
+Bit#(8) rDELAY1  = 8'h2C;
+Bit#(8) rTXMARK  = 8'h50;
+Bit#(8) rRXMARK  = 8'h54;
+Bit#(8) rIP      = 8'h74;
+Bit#(8) rFMT     = 8'h40;
+Bit#(8) rTXDATA  = 8'h48;
+Bit#(8) rRXDATA  = 8'h4C;
 
 typedef enum {{ Setup, Send, Recv, WmA, WmB, WmC, WmD, WmE,
                CsOffA, CsOffB, CsOffC, CsHoldA, CsHoldB, CsHoldC, CsHoldD, Flush,
+               PhaA, PhaB, PhaC, PhaD, CsdA, CsdB, CsdC, CsdD, CsdE, CsdF,
+               HoldA, HoldB, HoldC, HoldD, HoldE, HoldF, HoldG, HoldH, HoldI,
+               HoldJ, HoldJ2, HoldJ3, HoldK, HoldL, HoldM, Flush2,
+               {run_names}, TmChk, Flush3, OvfM, OvfA, OvfB, OvfC, Flush4,
                DirSet, DirWait, DirCheck, LsbSet, LsbWait, LsbCheck, Done }}
   Phase deriving (Bits, Eq);
 
@@ -137,13 +465,34 @@ module mkSpi{label}Tb(Empty);
   Reg#(Bit#(16)) s    <- mkReg(0);
   Reg#(Bit#(8))  sent <- mkReg(0);
   Reg#(Bit#(8))  got  <- mkReg(0);
-  Reg#(Bit#(32)) cyc  <- mkReg(0);
+  // 监视器与超时规则都读它。用普通寄存器会与各阶段规则绕成环，bsc 把超时规则
+  // 整条挡掉，cyc 恒为零，量出来的时序全是零
+  Reg#(Bit#(32)) cyc  <- mkConfigReg(0);
   Reg#(Bool)     bad  <- mkReg(False);
   Reg#(Bool)     sawCs <- mkReg(False);
 
   // 自环：IO0 出去的接回 IO1
   Reg#(Bool) csNow  <- mkReg(False);
   Reg#(Bool) csSaw[2] <- mkCReg(2, False);
+  // 片选引脚的整组快照，与第 0 根是否翻高过
+  Reg#(Bit#({csw})) csPins <- mkReg('1);
+  Reg#(Bool) csHi[2] <- mkCReg(2, False);
+
+  // 时序监视器：只看引脚。第 0 根片选的按下与放开、SCK 的每一次翻转
+  Reg#(Bool)     onWas    <- mkReg(False);
+  Reg#(Bit#(1))  sckWas   <- mkReg(0);
+  Reg#(Bool)     leadPend <- mkReg(False);
+  Reg#(Bit#(32)) tOn      <- mkReg(0);
+  Reg#(Bit#(32)) tOff     <- mkReg(0);
+  Reg#(Bit#(32)) tEdge    <- mkReg(0);
+  Reg#(Bit#(32)) mLead    <- mkReg(0);
+  Reg#(Bit#(32)) mTail    <- mkReg(0);
+  Reg#(Bit#(32)) mInact   <- mkReg(0);
+  Reg#(Bit#(32)) mGap     <- mkReg(0);
+  Reg#(Bit#(32)) nOn      <- mkReg(0);
+  Reg#(Bit#(32)) onMark   <- mkReg(0);
+  Reg#(Bit#(8))  ovfN     <- mkReg(0);
+{slots}
 
   rule loop;
     Bit#(4) o = sp.pins.io_o;
@@ -153,11 +502,37 @@ module mkSpi{label}Tb(Empty);
     // 所以在这里打一拍，检查规则只看寄存器
     csNow <= (sp.pins.cs_n != '1);
     if (sp.pins.cs_n != '1) csSaw[0] <= True;
+    csPins <= sp.pins.cs_n;
+    if (sp.pins.cs_n[0] == 1) csHi[0] <= True;
+
+    Bool on = sp.pins.cs_n[0] == 0;
+    Bit#(1) k = sp.pins.sck;
+    onWas  <= on;
+    sckWas <= k;
+    if (on && !onWas) begin
+      tOn <= cyc;
+      nOn <= nOn + 1;
+      mInact <= cyc - tOff;
+      leadPend <= k == sckWas;
+      if (k != sckWas) mLead <= 0;
+    end else if (leadPend && k != sckWas) begin
+      mLead <= cyc - tOn;
+      leadPend <= False;
+    end
+    if (!on && onWas) begin
+      tOff <= cyc;
+      mTail <= cyc - tEdge;
+    end
+    // 一帧之内相邻两沿恰好隔 H 拍，比它长的只能是帧与帧之间
+    if (k != sckWas) begin
+      tEdge <= cyc;
+      if (cyc - tEdge > {H}) mGap <= cyc - tEdge;
+    end
   endrule
 
   rule timeout;
     cyc <= cyc + 1;
-    if (cyc > 100000) begin
+    if (cyc > 400000) begin
       $display("TIMEOUT in phase %0d", pack(ph));
       $finish(1);
     end
@@ -309,7 +684,57 @@ module mkSpi{label}Tb(Empty);
   rule flush (ph == Flush);
     let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
                                       wdata: 0, wstrb: 4'hF }});
-    if (x.rdata[31] == 1) ph <= {after_recv};
+    if (x.rdata[31] == 1) ph <= PhaA;
+  endrule
+
+{cs_phase}
+{chr(10).join(run_rules)}
+  rule tmChk (ph == TmChk);
+{chk}
+    ph <= Flush3;
+  endrule
+
+  rule flush3 (ph == Flush3);
+    let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata[31] == 1) ph <= OvfM;
+  endrule
+
+  // 只发不读：接收队列满了以后帧照样得发出去。原来接收入队带守卫，队列一满
+  // 整条移位规则停住，发满 fifoDepth 帧就卡死。AUTO 下一帧按一次片选，数按下的次数
+  rule ovfM (ph == OvfM);
+    onMark <= nOn;
+    ovfN   <= 0;
+    ph     <= OvfA;
+  endrule
+
+  rule ovfA (ph == OvfA);
+    wr(rTXDATA, 32'h0000005A);
+    ph <= OvfB;
+    s  <= 0;
+  endrule
+
+  rule ovfB (ph == OvfB);
+    if (s < 300) s <= s + 1;
+    else begin
+      s    <= 0;
+      ovfN <= ovfN + 1;
+      ph   <= (ovfN + 1 == {NOVF}) ? OvfC : OvfA;
+    end
+  endrule
+
+  rule ovfC (ph == OvfC);
+    if (nOn - onMark != {NOVF}) begin
+      $display("FAIL only %0d of {NOVF} frames went out while rxdata was never read", nOn - onMark);
+      bad <= True;
+    end
+    ph <= Flush4;
+  endrule
+
+  rule flush4 (ph == Flush4);
+    let x <- sp.regs.access(RegReq {{ addr: rRXDATA, write: False,
+                                      wdata: 0, wstrb: 4'hF }});
+    if (x.rdata[31] == 1) begin ph <= DirSet; s <= 0; end
   endrule
 
   rule fin (ph == Done);
