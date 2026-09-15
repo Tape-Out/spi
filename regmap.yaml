@@ -50,7 +50,7 @@ regs:
       - { name: proto, bits: "1:0",  sw: rw, hw: r, reset: 0 }
       - { name: endian, bits: "2:2", sw: rw, hw: r, reset: 0 }
       - { name: dir,   bits: "3:3",  sw: rw, hw: r, reset: 0 }
-      - { name: len,   bits: "19:16", sw: rw, hw: r, reset: 8 }
+      - { name: len,   bits: "19:16", sw: rw, hw: r, reset: 8, legal: [ { min: 0, max: 8 } ] }
   - name: txdata
     offset: 0x48
     desc: transmit, write pushes

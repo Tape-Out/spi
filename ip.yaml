@@ -42,10 +42,10 @@ features:
     default: false
     area:
       points:
-        '1': 166.04
-        '2': 169.4
-        '4': 124.04
-        '8': 165.2
+        '1': 156.52
+        '2': 160.44
+        '4': 71.12
+        '8': 209.72
       per: fifoDepth
 emit:
 - kind: bsv
@@ -105,22 +105,22 @@ area:
       fifoDepth: 1
       quad: true
       csWidth: 1
-    um2: 2643.2
+    um2: 2633.68
   - at:
       fifoDepth: 2
       quad: true
       csWidth: 1
-    um2: 2783.76
+    um2: 2774.8
   - at:
       fifoDepth: 4
       quad: true
       csWidth: 1
-    um2: 3354.68
+    um2: 3301.76
   - at:
       fifoDepth: 8
       quad: true
       csWidth: 1
-    um2: 4228.56
+    um2: 4273.08
   - at:
       fifoDepth: 8
       csWidth: 2
@@ -140,9 +140,9 @@ area:
     tool: ecc
     pdk: ics55
     freq_mhz: 100
-    measured: '2026-09-14'
+    measured: '2026-09-15'
     toolchain: bsc 2026.01 · yosys 0.68+195 · ecc 0.1.0a11
-    gen_digest: sha256:c7b153f521fec083
+    gen_digest: sha256:8c7fb623a9cea1b1
   params:
     csWidth:
       points:
