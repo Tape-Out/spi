@@ -23,7 +23,12 @@ label = cfg.get("label", "")
 k = cfg.get("knobs", {})
 depth = int(k.get("fifoDepth", 8))
 csw = int(k.get("csWidth", 1))
-quad = bool(k.get("quad", False))
+lines = int(k.get("lines", 1))
+multi = lines > 1          # 多线共享一组双向 IO，单线是分开的 MOSI 与 MISO
+STEPS = -(-8 // lines)     # 一帧八位要走几拍
+iow = max(2, lines)        # 单线要 MOSI 与 MISO 两根，多线是共享的一组
+# 自环：多线把整组接回去，单线把 MOSI 接到 MISO
+loopback = "o" if multi else "{o[0], 1'b0}"
 
 BYTES = [0xA5, 0x00, 0xFF, 0x3C]
 # 这一台是「先全发完再全读出」，发多了接收队列会溢出丢字节
@@ -43,7 +48,7 @@ NOVF = depth + 2
 
 lst = chr(10).join(f"      {i}: return 8'h{b:02X};" for i, b in enumerate(BYTES))
 
-if quad:
+if multi:
     dir_phase = f'''  // dir = 1 是只发：线上回来的必须丢掉
   rule dirSet (ph == DirSet);
     case (s)
@@ -103,13 +108,15 @@ if quad:
   endrule
 '''
     verdict = ("loopback both ways round and at pha=1, chip select default level and hold release, "
-               "the four delays, and a send only frame keeps nothing")
+               "the four delays, a send only frame keeps nothing, and the frame takes "
+               f"{STEPS} beats on {lines} lines")
 else:
     dir_phase = '''  rule dirSet (ph == DirSet);
-    ph <= Done;                      // 没开 quad，帧格式寄存器不存在
+    ph <= Done;                      // 单线时帧格式寄存器不存在
   endrule
 '''
-    verdict = "loopback at both phases, chip select default level and hold release, and the four delays"
+    verdict = ("loopback at both phases, chip select default level and hold release, "
+               "the four delays, and eight beats on one line")
 
 hold_other = f'''  // 只改另一根的默认电平：选中那一根的状态没变，片选得继续按住
   rule holdH (ph == HoldH);
@@ -406,6 +413,13 @@ if two:
          "in AUTO the gap between frames moved with interxfr, which applies only to HOLD and OFF: %0d and %0d cycles",
          "vautoB, vautoA"),
     ]
+# 吞吐：一帧八位，每拍走 lines 位，于是 ceil(8/lines) 拍、两倍的 SCK 翻转。
+# 数的是引脚上的翻转，不是寄存器——「四线只是名义支持」这种事瞒不过这一条
+checks.append((f"mPerF != {2 * STEPS}",
+               f"lines={lines} moves {lines} bits a beat, so a frame should take "
+               f"{2 * STEPS} sck edges, not %0d",
+               "mPerF"))
+
 # 并列的 if 各写一次 bad 会被判并行冲突（G0004），先攒进局部变量
 chk = "    Bool wrong = False;" + chr(10) + chr(10).join(f'''    if ({c}) begin
       $display("FAIL {m}", {a});
@@ -421,8 +435,8 @@ import ConfigReg::*;
 import RegIf::*;
 import Spi::*;
 
-// 由 htest/mkspitb.py 生成，勿手改。
-// 这一点：fifoDepth={depth} csWidth={csw} quad={quad}
+// 由 tb/mkspitb.py 生成，勿手改。
+// 这一点：fifoDepth={depth} csWidth={csw} lines={lines}
 
 Integer nbytes = {NSEND};
 
@@ -458,8 +472,7 @@ typedef enum {{ Setup, Send, Recv, WmA, WmB, WmC, WmD, WmE,
 
 (* synthesize *)
 module mkSpi{label}Tb(Empty);
-  SpiIfc#(8, 32, {depth}, {csw}) sp <- mkSpi(
-      SpiCfg {{ quad: {"True" if quad else "False"} }});
+  SpiIfc#(8, 32, {depth}, {csw}, {lines}) sp <- mkSpi(SpiCfg {{ none: 0 }});
 
   Reg#(Phase)    ph   <- mkReg(Setup);
   Reg#(Bit#(16)) s    <- mkReg(0);
@@ -492,11 +505,15 @@ module mkSpi{label}Tb(Empty);
   Reg#(Bit#(32)) nOn      <- mkReg(0);
   Reg#(Bit#(32)) onMark   <- mkReg(0);
   Reg#(Bit#(8))  ovfN     <- mkReg(0);
+  // 吞吐：第一帧片选按下期间 SCK 翻转几次。线数翻倍，翻转次数减半——
+  // 数的是线上的位，不是寄存器，所以「四线只是名义支持」这种事瞒不过去
+  Reg#(Bit#(32)) nEdgeF   <- mkReg(0);
+  Reg#(Bit#(32)) mPerF    <- mkReg(0);
 {slots}
 
   rule loop;
-    Bit#(4) o = sp.pins.io_o;
-    sp.pins.io_i({{2'b00, o[0], 1'b0}});
+    Bit#({iow}) o = sp.pins.io_o;
+    sp.pins.io_i({loopback});
     if (sp.pins.cs_n != '1) sawCs <= True;
     // 片选的快照：读 cs_n 的规则不能同时写寄存器（会被判永不触发），
     // 所以在这里打一拍，检查规则只看寄存器
@@ -523,6 +540,10 @@ module mkSpi{label}Tb(Empty);
       tOff <= cyc;
       mTail <= cyc - tEdge;
     end
+    // 第一帧按下期间数 SCK 翻转：线数翻倍，翻转数减半
+    if (on && !onWas) nEdgeF <= 0;
+    else if (on && k != sckWas) nEdgeF <= nEdgeF + 1;
+    if (!on && onWas && mPerF == 0) mPerF <= nEdgeF;
     // 一帧之内相邻两沿恰好隔 H 拍，比它长的只能是帧与帧之间
     if (k != sckWas) begin
       tEdge <= cyc;
@@ -752,4 +773,4 @@ endpackage
 '''
 
 (out / f"Spi{label}Tb.bsv").write_text(txt, encoding="utf-8")
-print(f"  spi 自环 {NSEND} 字节：fifoDepth={depth} csWidth={csw} quad={quad}")
+print(f"  spi 自环 {NSEND} 字节：fifoDepth={depth} csWidth={csw} lines={lines}")

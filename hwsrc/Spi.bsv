@@ -7,37 +7,38 @@ import SpiRegs::*;
 
 // 本包不认识任何总线：对外只给中立的 RegIf，接哪种总线由 wrap 或装配决定。
 typedef struct {
-  Bool quad;
+  Bit#(0) none;
 } SpiCfg;
 
 // 一帧的节拍（19.9）。Lead、Tail、Rest、Gap 各数一段延时，单位都是一个 SCK 周期
 typedef enum { Idle, Lead, Load, Xfer, Tail, Rest, Gap } Beat deriving (Bits, Eq);
 
-// 四根数据线一直在接口上，单线模式只用到 io[0] 与 io[1]——真实的 QSPI 焊盘就是
-// 这么接的（MOSI=IO0，MISO=IO1），单线时把 IO2/IO3 的方向关掉即可。
-interface SpiPins#(numeric type csWidth);
+// 数据线根数由 lines 定，但单线与双线用的是分开的 MOSI 与 MISO，所以至少两根：
+// 单线 MOSI=IO0、MISO=IO1，四线八线是一组双向的 IO。
+interface SpiPins#(numeric type csWidth, numeric type io);
   (* always_ready, result = "sck"    *) method Bit#(1) sck;
   (* always_ready, result = "cs_n"   *) method Bit#(csWidth) cs_n;
-  (* always_ready, result = "io_o"   *) method Bit#(4) io_o;
-  (* always_ready, result = "io_oe"  *) method Bit#(4) io_oe;
+  (* always_ready, result = "io_o"   *) method Bit#(io) io_o;
+  (* always_ready, result = "io_oe"  *) method Bit#(io) io_oe;
   (* always_ready, always_enabled, prefix = "" *)
-  method Action io_i((* port = "io_i" *) Bit#(4) v);
+  method Action io_i((* port = "io_i" *) Bit#(io) v);
 endinterface
 
 interface SpiIfc#(numeric type aw, numeric type dw,
-                  numeric type fifoDepth, numeric type csWidth);
+                  numeric type fifoDepth, numeric type csWidth,
+                  numeric type lines);
   interface RegIf#(aw, dw) regs;
-  interface SpiPins#(csWidth) pins;
+  interface SpiPins#(csWidth, TMax#(2, lines)) pins;
   (* always_ready *) method Bool irq;
 endinterface
 
-module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
+module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth, lines))
     provisos (Mul#(TDiv#(dw, 8), 8, dw), Add#(_a, 8, aw), Add#(_b, 12, dw),
               Add#(_c, 1, dw), Add#(_d, csWidth, dw), Add#(_e, 2, dw),
-              Add#(_f, 4, dw), Add#(_g, 8, dw), Add#(_h, csWidth, 8), Add#(_i, 3, dw));
+              Add#(_f, 4, dw), Add#(_g, 8, dw), Add#(_h, csWidth, 8), Add#(_i, 3, dw),
+              Add#(_j, TMax#(2, lines), 8));
 
-  SpiRegsIfc#(aw, dw, fifoDepth, csWidth) r <- mkSpiRegs(
-      SpiRegsCfg { quad: cfg.quad });
+  SpiRegsIfc#(aw, dw, fifoDepth, csWidth, lines) r <- mkSpiRegs;
 
   // 去守卫按端口给：软件那一端走 always_ready 的总线方法，硬件那一端走规则。
   // 接收的入队也去守卫：带守卫时 notFull 被提到整条移位规则头上，接收队列一满
@@ -54,7 +55,11 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   Reg#(Bit#(8))   shTx  <- mkReg(0);
   Reg#(Bit#(8))   shRx  <- mkReg(0);
   Reg#(Bool)      txPend <- mkReg(False);
-  Wire#(Bit#(4))  ioIn  <- mkBypassWire;
+  Wire#(Bit#(TMax#(2, lines))) ioIn <- mkBypassWire;
+
+  // 每拍走几位。单线是经典四线 SPI（MOSI 出、MISO 进），多线共享一组双向 IO
+  Integer nl = valueOf(lines);
+  Bool multi = nl > 1;
 
   // 片选由硬件按着没有，以及按下那一刻各根的电平。按住期间 csid、csdef 再变，
   // 引脚不跟着跳：先走完 sckcs 再放开、再数 intercs（19.8、19.9）
@@ -76,20 +81,18 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
   Bit#(8) txLevel = txIn - txOut;
   Bit#(8) rxLevel = rxIn - rxOut;
 
-  // 帧方向。这个寄存器本来就被 quad 门控，所以关掉 quad 时它读回零、
-  // 两个判据都不成立，行为跟以前一模一样。
-  //   dir = 1：只发，线上回来的丢掉——共享线的双线/四线模式下，
-  //            主机正在驱动，采到的是自己
+  // 帧方向。fmt 本来就被 lines 门控，单线时它读回零、两个判据都不成立。
+  //   dir = 1：只发，线上回来的丢掉——共享线上主机正在驱动，采到的是自己
   //   dir = 0：只收，共享线上放开驱动让从机送
-  Bool sendOnly = cfg.quad && r.fmt_dir == 1;
-  Bool recvOnly = cfg.quad && r.fmt_dir == 0;
+  Bool sendOnly = multi && r.fmt_dir == 1;
+  Bool recvOnly = multi && r.fmt_dir == 0;
 
-  // 帧长只有开了 quad 才可配，否则恒 8 位
-  Bit#(4) flen = cfg.quad ? (r.fmt_len == 0 ? 8 : r.fmt_len) : 8;
+  // 帧长只有多线才可配，否则恒 8 位
+  Bit#(4) flen = multi ? (r.fmt_len == 0 ? 8 : r.fmt_len) : 8;
 
   // 位序（19.10 表 78）。取哪一位与往哪边移是**同一个决定**：取第 0 位就得右移。
   // 手册还要求 len < 8 时低位先出右对齐，右移正好满足。
-  Bool lsb = cfg.quad && r.fmt_endian == 1;
+  Bool lsb = multi && r.fmt_endian == 1;
 
   // 表 73：只有 HOLD 与 OFF 帧后不放片选，保留的 1 按 AUTO 走
   Bool keep = r.csmode == 2 || r.csmode == 3;
@@ -181,15 +184,18 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
       // 于是 pha = 0 采样落在前沿、pha = 1 落在后沿，而 pha = 1 的第一个前沿就是帧头，
       // 手册里 cssck 与 sckcs 各自那半个隐含周期由此而来。原来让 pha 去换采样与
       // 移位的先后：第一个前沿就把最高位移走，收尾那次采样也赶不上入队，收发都错一位
+      // 单线只有 MISO 那一根，多线是整组；nl 与 8 的加减都在更宽的类型里做
+      Bit#(8) got = multi ? zeroExtend(ioIn) : zeroExtend(ioIn[1]);
+      Bit#(5) nxt = zeroExtend(bitn) + fromInteger(nl);
       if (!half)
-        shRx <= lsb ? {ioIn[1], shRx[7:1]} : {shRx[6:0], ioIn[1]};
-      else if (bitn + 1 == flen) begin
+        shRx <= lsb ? ((shRx >> nl) | (got << (8 - nl))) : ((shRx << nl) | got);
+      else if (nxt >= zeroExtend(flen)) begin
         if (!sendOnly && rxq.notFull) begin rxq.enq(shRx); rxIn <= rxIn + 1; end
         st  <= keep ? Gap : Tail;
         dly <= keep ? r.delay1_interxfr : r.delay0_sckcs;
       end else begin
-        shTx <= lsb ? {1'b0, shTx[7:1]} : {shTx[6:0], 1'b0};
-        bitn <= bitn + 1;
+        shTx <= lsb ? (shTx >> nl) : (shTx << nl);
+        bitn <= truncate(nxt);
       end
     end
   endrule
@@ -220,11 +226,12 @@ module mkSpi#(SpiCfg cfg)(SpiIfc#(aw, dw, fifoDepth, csWidth))
     // 表 73 与 19.7：非活动电平由 csdef 给；OFF 时硬件不碰，引脚停在 csdef 上，
     // 软件改 csdef 就能自己控片选
     method Bit#(csWidth) cs_n = (csOn && r.csmode != 3) ? csAct : r.csdef;
-    method Bit#(4) io_o  = {3'b000, lsb ? shTx[0] : shTx[7]};
-    // 四线模式下收方向要放开全部四根，否则主机与从机对着驱动
-    method Bit#(4) io_oe = (cfg.quad && r.fmt_proto == 2)
-                         ? (recvOnly ? 4'b0000 : 4'b1111) : 4'b0001;
-    method Action io_i(Bit#(4) v); ioIn._write(v); endmethod
+    // 高位先出取顶上 nl 位，低位先出取底下 nl 位；单线只驱 IO0
+    method Bit#(TMax#(2, lines)) io_o =
+        truncate((lsb ? shTx : (shTx >> (8 - nl))) & (multi ? ((1 << nl) - 1) : 1));
+    // 共享一组 IO 时收方向要全放开，否则主机与从机对着驱动；单线只驱 MOSI
+    method Bit#(TMax#(2, lines)) io_oe = multi ? (recvOnly ? 0 : '1) : 1;
+    method Action io_i(Bit#(TMax#(2, lines)) v); ioIn._write(v); endmethod
   endinterface
   // 与喂给 ip 的是同一个表达式
   method Bool irq = ((r.ie_txwm == 1) && txLevel < zeroExtend(r.txmark))

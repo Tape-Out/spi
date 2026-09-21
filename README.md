@@ -1,8 +1,8 @@
 # spi
 
-SPI master and slave, with QSPI and execute-in-place as features.
+SPI master, one to eight data lines.
 
-![maturity](https://img.shields.io/badge/maturity-planned-lightgrey) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
+![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
 Part of the [Tape-Out](https://github.com/Tape-Out) IP library: Bluespec IP over the
 bus-neutral contracts in [`hwcore`](https://github.com/Tape-Out/hwcore), assembled by
@@ -11,13 +11,13 @@ bus-neutral contracts in [`hwcore`](https://github.com/Tape-Out/hwcore), assembl
 
 ## Status
 
-Planned. What sits in this repository today is the retired picorv32-era Verilog, kept for
-provenance. The Bluespec rewrite against the [`spec`](https://github.com/Tape-Out/xrspec)
-contracts has not landed yet, and it will not reuse this source.
+Simulated. The register map follows chapter 19 of the SiFive FE310-G002 manual. `lines`
+picks 1, 2, 4 or 8 data lines and the shifter moves that many bits a beat, so a frame
+takes 8, 4, 2 or 1 beats; the behavioural testbench counts the edges on the pins.
 
-## Notes from the original
-
-暂时实现一个只有一个主设备的SPI，日后扩展多主
+Not implemented: per-frame protocol selection (`fmt.proto` is accepted and ignored,
+since the line count is fixed at build time), the memory-mapped flash interface
+(`fctrl`/`ffmt`), execute-in-place, and the slave side.
 
 ## License
 

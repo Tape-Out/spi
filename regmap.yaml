@@ -2,7 +2,7 @@ ip: spi
 contract: { aw: 8, dw: 32 }
 base: 0x10005000
 size: 0x100
-params: [fifoDepth, csWidth]
+params: [fifoDepth, csWidth, lines]
 regs:
   - name: sckdiv
     offset: 0x00
@@ -45,7 +45,7 @@ regs:
   - name: fmt
     offset: 0x40
     desc: frame format
-    feature: quad
+    feature: { lines: [2, 4, 8] }
     fields:
       - { name: proto, bits: "1:0",  sw: rw, hw: r, reset: 0 }
       - { name: endian, bits: "2:2", sw: rw, hw: r, reset: 0 }
