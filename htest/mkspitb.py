@@ -421,7 +421,7 @@ import ConfigReg::*;
 import RegIf::*;
 import Spi::*;
 
-// 由 tb/mkspitb.py 生成，勿手改。
+// 由 htest/mkspitb.py 生成，勿手改。
 // 这一点：fifoDepth={depth} csWidth={csw} quad={quad}
 
 Integer nbytes = {NSEND};
